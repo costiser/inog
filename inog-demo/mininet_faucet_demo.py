@@ -37,6 +37,8 @@ from mininet.util import quietRun
 
 from time import sleep
 
+EXT_INT = 'enp0s9'
+
 
 class FaucetTopo(Topo):
     """Topology with 2 switches controlled by Faucet."""
@@ -101,10 +103,10 @@ def run():
     info('...connected\n')
 
     # Start DHCP server on DHCP NFV
-    info('*** Checking DNSMASQ running in DHCP NFV')
+    info('*** Checking dnsmasq running in DHCP NFV')
     dhcp_nfv = net.get('dhcp')
-    while '0.0.0.0:67' in dhcp_nfv.cmd('netstat -an | grep 67'):
-        sleep(3)
+    while '0.0.0.0:67' not in dhcp_nfv.cmd('netstat -an | grep 67'):
+        sleep(2)
         info('.')
         dhcp_nfv.cmd('/usr/sbin/dnsmasq')
     info('...started\n')
@@ -127,15 +129,36 @@ def run():
     info('...got IP\n')
 
     # Add the bridged interface to nfv server
-    info('*** Moving one interface into the NAT NFV\n')
+    info('*** Moving bridged interface into the NAT NFV..')
     nat_nfv = net.get('nat')
-    Intf('enp0s9', node=nat_nfv)
-    nat_nfv.cmd('/sbin/iptables -t nat -A POSTROUTING -o enp0s9 -j MASQUERADE')
-    nat_nfv.cmd('/sbin/sysctl -q -w net.ipv4.ip_forward=1')
-    nat_nfv.cmd('/sbin/ifconfig lo:1 1.1.1.1/24')
+    Intf(EXT_INT, node=nat_nfv)
+    sleep(1)
     nat_nfv.cmd('/sbin/dhclient enp0s9')
+    info('...done\n')
+    info('*** Enabling IP forwarding and Masquerading on NAT NFV.. ')
+    nat_nfv.cmd('/sbin/ifconfig lo:1 1.1.1.1/24')
+    nat_nfv.cmd('/sbin/ifconfig lo:1 1111::1/64')
+    nat_nfv.cmd('/sbin/iptables -t nat -A POSTROUTING -o %s -j MASQUERADE'
+                % EXT_INT)
+    nat_nfv.cmd('/sbin/sysctl -q -w net.ipv4.ip_forward=1')
+    info('...done\n')
 
     CLI(net)
+
+    nat_nfv.delIntf(EXT_INT)
+    info('*** Stopping %i links:' % len(net.links))
+    for link in net.links:
+        info('.')
+        link.stop()
+    info('\n')
+
+    info('*** Stopping %i hosts: ' % len(net.hosts))
+    for host in net.hosts:
+        info(host.name + ' ')
+        host.stop(deleteIntfs=True)
+        host.terminate()
+    info('...done\n')
+
     net.stop()
 
 
